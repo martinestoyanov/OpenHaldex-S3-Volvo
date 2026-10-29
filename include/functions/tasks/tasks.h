@@ -14,3 +14,6 @@ void frames25(void* arg);
 void frames100(void* arg);
 void frames200(void* arg);
 void frames1000(void* arg);
+
+// Resume or suspend the generated-frame tasks to match isStandalone at runtime.
+void tasksApplyStandaloneState();

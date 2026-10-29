@@ -17,6 +17,8 @@
 #include "functions/tasks/tasks.h"
 #include "functions/power/power.h"
 #include "functions/diag/uds.h"
+#include "functions/can/can.h"
+#include "functions/volvo/volvo_p1.h"
 
 #include <optional>
 
@@ -189,7 +191,15 @@ static String buildMappedSignalKey(const char* bus, uint32_t frame_id, const cha
   return key;
 }
 
-static bool getRecommendedInputMappingsForGeneration(uint8_t generation, String& speed, String& throttle, String& rpm) {
+static bool getRecommendedInputMappingsForGeneration(uint8_t platform, uint8_t generation, String& speed,
+                                                     String& throttle, String& rpm) {
+  if (platform != PLATFORM_VW) {
+    // Volvo P1 decode signals come from the user profile; there is no built-in recommendation.
+    speed = "";
+    throttle = "";
+    rpm = "";
+    return false;
+  }
   switch (generation) {
   case 1:
   case 2:
@@ -211,13 +221,18 @@ static bool getRecommendedInputMappingsForGeneration(uint8_t generation, String&
   }
 }
 
-static bool getRecommendedModeTriggerForGeneration(uint8_t generation, mode_trigger_config_t& trigger) {
+static bool getRecommendedModeTriggerForGeneration(uint8_t platform, uint8_t generation,
+                                                   mode_trigger_config_t& trigger) {
   trigger.enabled = false;
   trigger.op = MODE_TRIGGER_GTE;
   trigger.value = 1.0f;
   trigger.mode = MODE_MAP;
   trigger.broadcastOpenHaldexOverCAN = broadcastOpenHaldexOverCAN;
 
+  if (platform != PLATFORM_VW) {
+    trigger.signal = "";
+    return false;
+  }
   switch (generation) {
   case 1:
   case 2:
@@ -236,15 +251,15 @@ static bool getRecommendedModeTriggerForGeneration(uint8_t generation, mode_trig
 static bool isRecommendedModeTriggerSignal(const String& signal) {
   mode_trigger_config_t pq = {};
   mode_trigger_config_t mqb = {};
-  (void)getRecommendedModeTriggerForGeneration(2, pq);
-  (void)getRecommendedModeTriggerForGeneration(5, mqb);
+  (void)getRecommendedModeTriggerForGeneration(PLATFORM_VW, 2, pq);
+  (void)getRecommendedModeTriggerForGeneration(PLATFORM_VW, 5, mqb);
   return signal == pq.signal || signal == mqb.signal;
 }
 
-static bool seedModeTriggerForGeneration(uint8_t generation, mode_trigger_config_t& trigger,
+static bool seedModeTriggerForGeneration(uint8_t platform, uint8_t generation, mode_trigger_config_t& trigger,
                                          bool overwrite_known_default) {
   mode_trigger_config_t recommended = {};
-  if (!getRecommendedModeTriggerForGeneration(generation, recommended)) {
+  if (!getRecommendedModeTriggerForGeneration(platform, generation, recommended)) {
     return false;
   }
 
@@ -268,11 +283,13 @@ static bool seedModeTriggerForGeneration(uint8_t generation, mode_trigger_config
   return changed;
 }
 
-static bool seedMissingInputMappingsForGeneration(uint8_t generation, String& speed, String& throttle, String& rpm) {
+static bool seedMissingInputMappingsForGeneration(uint8_t platform, uint8_t generation, String& speed,
+                                                  String& throttle, String& rpm) {
   String default_speed;
   String default_throttle;
   String default_rpm;
-  if (!getRecommendedInputMappingsForGeneration(generation, default_speed, default_throttle, default_rpm)) {
+  if (!getRecommendedInputMappingsForGeneration(platform, generation, default_speed, default_throttle,
+                                                default_rpm)) {
     return false;
   }
 
@@ -630,10 +647,15 @@ static void handleStatus(AsyncWebServerRequest* request) {
   doc["effectiveBroadcastOpenHaldexOverCAN"] = openhaldexEffectiveBroadcastOpenHaldexOverCAN();
   doc["canviewCaptureMode"] = canview_capture_active;
   doc["haldexGeneration"] = haldexGeneration;
+  doc["vehiclePlatform"] = vehiclePlatformName(vehiclePlatform);
+  doc["chassisListenOnly"] = chassisListenOnly;
   doc["disableThrottle"] = disableThrottle;
   doc["disableSpeed"] = disableSpeed;
   doc["lockReleaseRatePctPerSec"] = lockReleaseRatePctPerSec;
   doc["uptimeMs"] = millis();
+
+  JsonObject volvo = doc["volvo"].to<JsonObject>();
+  volvoWriteStatusJson(volvo, false);
 
   JsonObject logging = doc["logging"].to<JsonObject>();
   logging["masterEnabled"] = logToFileEnabled || logSerialEnabled || logCanToFileEnabled || logErrorToFileEnabled ||
@@ -681,6 +703,7 @@ static void handleStatus(AsyncWebServerRequest* request) {
   JsonObject frameDiag = doc["frameDiag"].to<JsonObject>();
   frameDiag["lockTarget"] = lock_target;
   frameDiag["haldexGen"] = haldexGeneration;
+  frameDiag["vehiclePlatform"] = vehiclePlatformName(vehiclePlatform);
 
   JsonObject learn = doc["learn"].to<JsonObject>();
   learn["active"] = (bool)haldexLearnActive;
@@ -700,10 +723,11 @@ static void handleStatus(AsyncWebServerRequest* request) {
 
   mode_trigger_config_t mode_trigger_config = {};
   if (!modeTriggerConfigGet(mode_trigger_config, 2)) {
-    (void)getRecommendedModeTriggerForGeneration(haldexGeneration, mode_trigger_config);
+    (void)getRecommendedModeTriggerForGeneration(vehiclePlatform, haldexGeneration, mode_trigger_config);
   }
   mode_trigger_config_t default_trigger = {};
-  const bool has_default_trigger = getRecommendedModeTriggerForGeneration(haldexGeneration, default_trigger);
+  const bool has_default_trigger =
+    getRecommendedModeTriggerForGeneration(vehiclePlatform, haldexGeneration, default_trigger);
   const String mode_trigger_signal = mode_trigger_config.signal.length() > 0
                                        ? mode_trigger_config.signal
                                        : (has_default_trigger ? default_trigger.signal : "");
@@ -922,7 +946,7 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
   getDashboardSignalSnapshot(dashboard_slots);
   mode_trigger_config_t mode_trigger_config = {};
   if (!modeTriggerConfigGet(mode_trigger_config, 2)) {
-    (void)getRecommendedModeTriggerForGeneration(haldexGeneration, mode_trigger_config);
+    (void)getRecommendedModeTriggerForGeneration(vehiclePlatform, haldexGeneration, mode_trigger_config);
   }
 
   bool disable_controller_set = false;
@@ -931,6 +955,10 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
   bool next_broadcast = broadcastOpenHaldexOverCAN;
   bool haldex_generation_set = false;
   uint8_t next_haldex_generation = haldexGeneration;
+  bool vehicle_platform_set = false;
+  uint8_t next_vehicle_platform = vehiclePlatform;
+  bool chassis_listen_only_set = false;
+  bool next_chassis_listen_only = chassisListenOnly;
   std::optional<bool> nextIsStandalone;
   bool low_power_sleep_set = false;
   bool next_low_power_sleep = lowPowerSleepEnabled;
@@ -1003,12 +1031,42 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
     next_broadcast = (bool)doc["broadcastOpenHaldexOverCAN"];
   }
 
+  if (doc.containsKey("vehiclePlatform")) {
+    uint8_t parsed_platform = PLATFORM_VW;
+    JsonVariant raw_platform = doc["vehiclePlatform"];
+    bool platform_ok = false;
+    if (raw_platform.is<const char*>()) {
+      platform_ok = vehiclePlatformFromString(String(raw_platform.as<const char*>()), parsed_platform);
+    } else if (raw_platform.is<int>()) {
+      const int value = raw_platform.as<int>();
+      platform_ok = value >= 0 && value < (int)vehicle_platform_t_MAX;
+      parsed_platform = (uint8_t)value;
+    }
+    if (!platform_ok) {
+      sendError(request, 400, "invalid vehiclePlatform (vw|volvo_p1)");
+      return;
+    }
+    vehicle_platform_set = true;
+    next_vehicle_platform = parsed_platform;
+  }
+
   if (doc.containsKey("haldexGeneration")) {
     int g = doc["haldexGeneration"];
-    if (g == 1 || g == 2 || g == 4 || g == 5) {
-      haldex_generation_set = true;
-      next_haldex_generation = (uint8_t)g;
+    if (!platformSupportsGeneration(next_vehicle_platform, (uint8_t)g)) {
+      sendError(request, 400, "haldexGeneration not supported by vehiclePlatform");
+      return;
     }
+    haldex_generation_set = true;
+    next_haldex_generation = (uint8_t)g;
+  } else if (vehicle_platform_set && next_vehicle_platform != vehiclePlatform &&
+             !platformSupportsGeneration(next_vehicle_platform, haldexGeneration)) {
+    sendError(request, 400, "select a haldexGeneration supported by the new vehiclePlatform");
+    return;
+  }
+
+  if (doc.containsKey("chassisListenOnly")) {
+    chassis_listen_only_set = true;
+    next_chassis_listen_only = (bool)doc["chassisListenOnly"];
   }
 
   if (doc.containsKey("lowPower")) {
@@ -1241,19 +1299,34 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
   }
 
   const uint8_t effective_haldex_generation = haldex_generation_set ? next_haldex_generation : haldexGeneration;
+  const uint8_t effective_platform = vehicle_platform_set ? next_vehicle_platform : vehiclePlatform;
+  const bool platform_changed = vehicle_platform_set && next_vehicle_platform != vehiclePlatform;
   if (haldex_generation_set && !low_power_sleep_set) {
     low_power_sleep_set = true;
-    next_low_power_sleep = (effective_haldex_generation == 5);
+    next_low_power_sleep = (effective_platform == PLATFORM_VW && effective_haldex_generation == 5);
+  }
+  if (platform_changed) {
+    // VW signal keys are meaningless on a Volvo bus and vice versa: drop stale mappings.
+    mapped_speed = "";
+    mapped_throttle = "";
+    mapped_rpm = "";
+    mappings_changed = true;
+    if (!mode_trigger_changed) {
+      next_mode_trigger.signal = "";
+      next_mode_trigger.enabled = false;
+      mode_trigger_changed = true;
+    }
   }
   if ((mappings_changed || haldex_generation_set) &&
-      seedMissingInputMappingsForGeneration(effective_haldex_generation, mapped_speed, mapped_throttle, mapped_rpm)) {
+      seedMissingInputMappingsForGeneration(effective_platform, effective_haldex_generation, mapped_speed,
+                                            mapped_throttle, mapped_rpm)) {
     mappings_changed = true;
   }
-  if (haldex_generation_set &&
-      seedModeTriggerForGeneration(effective_haldex_generation, next_mode_trigger, !mode_trigger_changed)) {
+  if (haldex_generation_set && seedModeTriggerForGeneration(effective_platform, effective_haldex_generation,
+                                                            next_mode_trigger, !mode_trigger_changed)) {
     mode_trigger_changed = true;
   } else if (mode_trigger_changed && next_mode_trigger.signal.length() == 0) {
-    (void)seedModeTriggerForGeneration(effective_haldex_generation, next_mode_trigger, false);
+    (void)seedModeTriggerForGeneration(effective_platform, effective_haldex_generation, next_mode_trigger, false);
   }
 
   if (mappings_changed) {
@@ -1297,12 +1370,32 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
     broadcastOpenHaldexOverCAN = next_broadcast;
     dirty = true;
   }
+  bool volvo_profile_reload = false;
+  if (vehicle_platform_set && vehiclePlatform != next_vehicle_platform) {
+    vehiclePlatform = next_vehicle_platform;
+    volvo_profile_reload = true;
+    dirty = true;
+  }
   if (haldex_generation_set) {
+    if (haldexGeneration != next_haldex_generation) {
+      volvo_profile_reload = true;
+    }
     haldexGeneration = next_haldex_generation;
+    dirty = true;
+  }
+  if (volvo_profile_reload && isVolvoPlatform()) {
+    if (!volvoProfileReload()) {
+      (void)volvoProfileWriteTemplate();
+    }
+  }
+  if (chassis_listen_only_set && chassisListenOnly != next_chassis_listen_only) {
+    chassisListenOnly = next_chassis_listen_only;
+    (void)canApplyChassisModeFromSettings();
     dirty = true;
   }
   if (nextIsStandalone.has_value()) {
     isStandalone = nextIsStandalone.value();
+    tasksApplyStandaloneState();
     dirty = true;
   }
   if (low_power_sleep_set) {
@@ -1431,6 +1524,8 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
   resp["broadcastOpenHaldexOverCAN"] = broadcastOpenHaldexOverCAN;
   resp["effectiveBroadcastOpenHaldexOverCAN"] = openhaldexEffectiveBroadcastOpenHaldexOverCAN();
   resp["haldexGeneration"] = haldexGeneration;
+  resp["vehiclePlatform"] = vehiclePlatformName(vehiclePlatform);
+  resp["chassisListenOnly"] = chassisListenOnly;
   resp["isStandalone"] = isStandalone;
   JsonObject respPower = resp["lowPower"].to<JsonObject>();
   respPower["sleepEnabled"] = lowPowerSleepEnabled;
@@ -1442,7 +1537,8 @@ static void handleSettingsJson(AsyncWebServerRequest* request, const String& bod
   respMappings["throttle"] = mapped_throttle;
   respMappings["rpm"] = mapped_rpm;
   mode_trigger_config_t resp_default_trigger = {};
-  const bool resp_has_default_trigger = getRecommendedModeTriggerForGeneration(haldexGeneration, resp_default_trigger);
+  const bool resp_has_default_trigger =
+    getRecommendedModeTriggerForGeneration(vehiclePlatform, haldexGeneration, resp_default_trigger);
   const String resp_mode_trigger_signal = mode_trigger_config.signal.length() > 0
                                             ? mode_trigger_config.signal
                                             : (resp_has_default_trigger ? resp_default_trigger.signal : "");
@@ -2296,7 +2392,20 @@ static void handleMeasuredValues(AsyncWebServerRequest* request) {
 
   JsonDocument doc;
   doc["haldexGeneration"] = haldexGeneration;
+  doc["vehiclePlatform"] = vehiclePlatformName(vehiclePlatform);
   JsonArray items = doc["items"].to<JsonArray>();
+
+  if (isVolvoPlatform()) {
+    doc["ok"] = false;
+    doc["transport"] = "";
+    doc["requestKind"] = "";
+    doc["status"] = "unsupported_platform";
+    doc["message"] = "Volvo DEM diagnostics use Volvo's own protocol; VW UDS/KWP routes do not apply";
+    JsonObject uds = doc["uds"].to<JsonObject>();
+    diagUdsWriteStatusJson(uds);
+    sendJson(request, 200, doc);
+    return;
+  }
 
   if (haldexGeneration == 5) {
     String raw_ids = "";
@@ -2450,10 +2559,10 @@ static void handleUdsClearDtc(AsyncWebServerRequest* request) {
   diag_uds_result_t result = {};
   bool ok = false;
   const char* transport = "";
-  if (haldexGeneration == 5) {
+  if (!isVolvoPlatform() && haldexGeneration == 5) {
     transport = "uds_can";
     ok = diagUdsClearDtc(group_of_dtc, result, 3000);
-  } else if (haldexGeneration == 2 || haldexGeneration == 4) {
+  } else if (!isVolvoPlatform() && (haldexGeneration == 2 || haldexGeneration == 4)) {
     transport = "kwp_tp20";
     ok = diagKwpTp20ClearDtc(group_of_dtc, result, 5000);
   } else {
@@ -2482,8 +2591,167 @@ static void handleUdsClearDtc(AsyncWebServerRequest* request) {
   sendJson(request, 200, doc);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Volvo P1 DEM profile / bench endpoints
+// ---------------------------------------------------------------------------------------------
+
+static void handleVolvoStatus(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["isStandalone"] = isStandalone;
+  doc["chassisListenOnly"] = chassisListenOnly;
+  doc["canReady"] = can_ready;
+  doc["hasCANHaldex"] = hasCANHaldex;
+  doc["hasCANChassis"] = hasCANChassis;
+  doc["lockTarget"] = lock_target;
+  doc["mode"] = modeName(openhaldexEffectiveMode());
+  JsonObject volvo = doc["volvo"].to<JsonObject>();
+  volvoWriteStatusJson(volvo, true);
+  sendJson(request, 200, doc);
+}
+
+static void handleVolvoProfileGet(AsyncWebServerRequest* request) {
+  String body;
+  if (!volvoProfileReadRaw(body)) {
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["error"] = "profile not found";
+    doc["path"] = volvoProfilePath();
+    sendJson(request, 404, doc);
+    return;
+  }
+  request->send(200, "application/json", body);
+}
+
+static void handleVolvoProfilePost(AsyncWebServerRequest* request, const String& body) {
+  if (!isVolvoPlatform()) {
+    sendError(request, 409, "select the Volvo P1 platform in Setup before editing a profile");
+    return;
+  }
+  String error;
+  if (!volvoProfileApplyJson(body, error)) {
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["error"] = error;
+    sendJson(request, 400, doc);
+    return;
+  }
+  JsonDocument resp;
+  resp["ok"] = true;
+  resp["path"] = volvoProfilePath();
+  JsonObject volvo = resp["volvo"].to<JsonObject>();
+  volvoWriteStatusJson(volvo, true);
+  sendJson(request, 200, resp);
+}
+
+static void handleVolvoProfileReset(AsyncWebServerRequest* request) {
+  if (!isVolvoPlatform()) {
+    sendError(request, 409, "select the Volvo P1 platform in Setup before editing a profile");
+    return;
+  }
+  if (!volvoProfileWriteTemplate()) {
+    sendError(request, 500, "failed to write template profile");
+    return;
+  }
+  JsonDocument resp;
+  resp["ok"] = true;
+  resp["path"] = volvoProfilePath();
+  sendJson(request, 200, resp);
+}
+
+// One-shot frame onto the Haldex (DEM) bus for bench probing. Never touches the vehicle bus.
+static void handleVolvoSend(AsyncWebServerRequest* request, const String& body) {
+  JsonDocument doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) {
+    sendError(request, 400, "invalid json");
+    return;
+  }
+  uint32_t id = 0;
+  JsonVariant raw_id = doc["id"];
+  if (raw_id.is<const char*>()) {
+    if (!parseHexU32(String(raw_id.as<const char*>()), id)) {
+      sendError(request, 400, "invalid id");
+      return;
+    }
+  } else if (raw_id.is<unsigned long>()) {
+    id = raw_id.as<unsigned long>();
+  } else {
+    sendError(request, 400, "id required");
+    return;
+  }
+  const bool extd = doc["extd"] | true;
+  uint8_t data[8] = {};
+  uint8_t dlc = 0;
+  JsonVariant raw_data = doc["data"];
+  if (raw_data.is<JsonArray>()) {
+    for (JsonVariant v : raw_data.as<JsonArray>()) {
+      if (dlc >= 8) {
+        sendError(request, 400, "data must be at most 8 bytes");
+        return;
+      }
+      uint32_t byte = 0;
+      if (v.is<const char*>()) {
+        if (!parseHexU32(String(v.as<const char*>()), byte) || byte > 0xFF) {
+          sendError(request, 400, "data bytes must be 0..255");
+          return;
+        }
+      } else {
+        const int n = v.as<int>();
+        if (n < 0 || n > 255) {
+          sendError(request, 400, "data bytes must be 0..255");
+          return;
+        }
+        byte = (uint32_t)n;
+      }
+      data[dlc++] = (uint8_t)byte;
+    }
+  } else if (raw_data.is<const char*>()) {
+    uint32_t parsed[8] = {};
+    uint8_t count = 0;
+    if (!parseHexList(String(raw_data.as<const char*>()), 0xFF, parsed, count, 8)) {
+      sendError(request, 400, "data must be a hex byte list");
+      return;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+      data[i] = (uint8_t)parsed[i];
+    }
+    dlc = count;
+  }
+  if (doc.containsKey("dlc")) {
+    const int requested = doc["dlc"] | (int)dlc;
+    if (requested < 0 || requested > 8) {
+      sendError(request, 400, "dlc must be 0..8");
+      return;
+    }
+    dlc = (uint8_t)requested;
+  }
+  const bool ok = volvoSendRawFrame(id, extd, dlc, data);
+  filelogLogEvent("volvo", String("raw send id=0x") + String(id, HEX) + " dlc=" + (int)dlc + (ok ? " ok" : " failed"));
+  JsonDocument resp;
+  resp["ok"] = ok;
+  resp["id"] = id;
+  resp["extd"] = extd;
+  resp["dlc"] = dlc;
+  sendJson(request, ok ? 200 : 503, resp);
+}
+
 void setupApi(AsyncWebServer& server) {
   ensureDefaults();
+
+  server.on("/api/volvo/status", HTTP_GET, [](AsyncWebServerRequest* request) { handleVolvoStatus(request); });
+  server.on("/api/volvo/profile", HTTP_GET, [](AsyncWebServerRequest* request) { handleVolvoProfileGet(request); });
+  server.on(
+    "/api/volvo/profile", HTTP_POST, [](AsyncWebServerRequest* request) { (void)request; }, nullptr,
+    [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+      onJsonBody(request, data, len, index, total, handleVolvoProfilePost);
+    });
+  server.on("/api/volvo/profile/reset", HTTP_POST,
+            [](AsyncWebServerRequest* request) { handleVolvoProfileReset(request); });
+  server.on(
+    "/api/volvo/send", HTTP_POST, [](AsyncWebServerRequest* request) { (void)request; }, nullptr,
+    [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+      onJsonBody(request, data, len, index, total, handleVolvoSend);
+    });
 
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request) { handleStatus(request); });
   server.on("/api/uds/status", HTTP_GET, [](AsyncWebServerRequest* request) { handleUdsStatus(request); });

@@ -14,6 +14,7 @@
 #include "functions/can/standalone_can.h"
 #include "functions/storage/storage.h"
 #include "functions/storage/filelog.h"
+#include "functions/volvo/volvo_p1.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +25,32 @@ static TaskHandle_t handle_frames100 = nullptr;
 static TaskHandle_t handle_frames25 = nullptr;
 static TaskHandle_t handle_frames20 = nullptr;
 static TaskHandle_t handle_frames10 = nullptr;
+static bool frame_tasks_running = false;
+
+void tasksApplyStandaloneState() {
+  TaskHandle_t handles[] = {handle_frames1000, handle_frames200, handle_frames100,
+                            handle_frames25,   handle_frames20,  handle_frames10};
+  if (!handle_frames10) {
+    return; // CAN was not ready at boot; frame tasks were never created.
+  }
+  if (isStandalone && !frame_tasks_running) {
+    for (TaskHandle_t h : handles) {
+      if (h) {
+        vTaskResume(h);
+      }
+    }
+    frame_tasks_running = true;
+    filelogLogInfo("tasks", "Standalone enabled; generated frame tasks resumed");
+  } else if (!isStandalone && frame_tasks_running) {
+    for (TaskHandle_t h : handles) {
+      if (h) {
+        vTaskSuspend(h);
+      }
+    }
+    frame_tasks_running = false;
+    filelogLogInfo("tasks", "Standalone disabled; generated frame tasks suspended");
+  }
+}
 
 static void updateLabels(void* arg) {
   while (1) {
@@ -150,7 +177,10 @@ void tasksInit() {
       vTaskSuspend(handle_frames25);
       vTaskSuspend(handle_frames20);
       vTaskSuspend(handle_frames10);
+      frame_tasks_running = false;
       filelogLogInfo("tasks", "Standalone disabled; generated frame tasks suspended");
+    } else {
+      frame_tasks_running = true;
     }
 
     xTaskCreatePinnedToCore(broadcastOpenHaldex, "broadcastOpenHaldex", 4096, NULL, 6, NULL, OH_CAN_TASK_CORE);
@@ -281,7 +311,10 @@ void showHaldexState(void* arg) {
 
 void frames10(void* arg) {
   while (1) {
-    if (isStandalone) {
+    if (isStandalone && isVolvoPlatform()) {
+      // Volvo P1: all periods are scheduled by the profile-driven generator.
+      volvoGeneratorTick(millis());
+    } else if (isStandalone) {
       switch (haldexGeneration) {
       case 1:
         Gen1_frames10();
@@ -303,7 +336,7 @@ void frames10(void* arg) {
 
 void frames20(void* arg) {
   while (1) {
-    if (isStandalone) {
+    if (isStandalone && !isVolvoPlatform()) {
       switch (haldexGeneration) {
       case 1:
         Gen1_frames20();
@@ -325,7 +358,7 @@ void frames20(void* arg) {
 
 void frames25(void* arg) {
   while (1) {
-    if (isStandalone) {
+    if (isStandalone && !isVolvoPlatform()) {
       switch (haldexGeneration) {
       case 1:
         Gen1_frames25();
@@ -349,7 +382,8 @@ void frames100(void* arg) {
   while (1) {
     if (isStandalone) {
       lock_target = get_lock_target_adjustment();
-      switch (haldexGeneration) {
+      awd_state.requested = lock_target;
+      if (!isVolvoPlatform()) switch (haldexGeneration) {
       case 1:
         Gen1_frames100();
         break;
@@ -370,7 +404,7 @@ void frames100(void* arg) {
 
 void frames200(void* arg) {
   while (1) {
-    if (isStandalone) {
+    if (isStandalone && !isVolvoPlatform()) {
       switch (haldexGeneration) {
       case 1:
         Gen1_frames200();
@@ -392,7 +426,7 @@ void frames200(void* arg) {
 
 void frames1000(void* arg) {
   while (1) {
-    if (isStandalone) {
+    if (isStandalone && !isVolvoPlatform()) {
       switch (haldexGeneration) {
       case 1:
         Gen1_frames1000();

@@ -17,6 +17,7 @@
 #include "functions/net/update.h"
 #include "functions/power/power.h"
 #include "functions/diag/uds.h"
+#include "functions/volvo/volvo_p1.h"
 
 static AsyncWebServer server(80);
 
@@ -274,6 +275,9 @@ void setup() {
   storageInit();
   filelogInit();
   storageLoad();
+  // Settings that change bus behaviour are only known after storageLoad().
+  canApplyChassisModeFromSettings();
+  volvoInit();
   diagUdsInit();
   LOG_INFO("system", "Storage loaded and logger active");
 

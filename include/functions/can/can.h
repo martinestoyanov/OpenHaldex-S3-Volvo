@@ -15,6 +15,8 @@ void parseCAN_hdx(void* arg);
 
 void canInit();
 bool canInitChassisOnly(twai_mode_t mode = TWAI_MODE_NO_ACK);
+// Re-initialise the chassis bus if the persisted listen-only setting differs from the running mode.
+bool canApplyChassisModeFromSettings();
 void canDeinit();
 void haldexCanSleep();
 void canRecoverIfBusFailure();

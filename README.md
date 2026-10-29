@@ -12,7 +12,7 @@ OpenHaldex-S3 is an ESP32-S3 based AWD controller for Haldex-equipped Volkswagen
 
 It is designed around inexpensive off-the-shelf hardware, inline installation at the factory Haldex connector, and a built-in web UI for setup, tuning, diagnostics, logging, and OTA updates.
 
-The project supports Haldex generations **1, 2, 4, and 5**. VAG did not use Gen 3 Haldex in this application.
+The project supports Haldex generations **1, 2, 4, and 5** on VW/Audi, and **Volvo P1 (S40 / V50 / C30) couplings with a Gen 2 or Gen 3 DEM** through a profile-driven standalone mode. VAG did not use Gen 3 Haldex in this application; the Gen 3 option exists for Volvo DEM upgrades. See [docs/volvo-p1.md](docs/volvo-p1.md).
 
 Designed to be easy to build, configure, and use, OpenHaldex-S3 requires no soldering or advanced electrical experience.
 
@@ -59,6 +59,7 @@ Main features:
 - Haldex Gen 1, 2, 4, and 5 support
 - PQ chassis DBC support for Gen 1/2/4
 - MQB chassis DBC support for Gen 5
+- Volvo P1 platform: Gen 2 / Gen 3 DEM standalone generator driven by an editable 29-bit frame profile, DEM status decode, user-defined decode signals, receive-only chassis tap, and a bench page for single-frame probing
 - Home dashboard with live mode, ratio, telemetry, and 8 user-selectable signal tiles
 - Setup page for generation selection, input mapping, dashboard signals, learned calibration, and CAN mode trigger
 - Map mode with editable 2D lock table, custom bins, map import/export, and saved map selection
@@ -230,12 +231,23 @@ Summary:
 - Haldex CAN returns from CANHB/CANLB.
 - On Gen 5 vehicles, Term30 can remain powered after ignition-off. Enable Power Save after setup.
 
+### Volvo P1 (S40 / V50 / C30) Builds
+
+Volvo couplings carry a Volvo DEM that listens to Volvo's 29-bit HS-CAN, so none of the VW wiring or frames above apply. The Volvo path is:
+
+1. Wire the DEM to the Haldex channel (CANHB/CANLB) with termination at both ends and power the T-2CAN from ignition.
+2. In **Setup** pick **Volvo Gen 2** (factory P1 DEM) or **Volvo Gen 3** (Gen 3 DEM upgrade) and Save.
+3. On the **Volvo DEM** page enable the standalone generator and fill the frame profile from captures of a working P1 AWD car.
+4. Later, tap the host car's HS-CAN on the chassis channel in receive-only mode for speed, throttle, rpm and DSTC-button inputs.
+
+The full procedure, wiring, Gen 2 vs Gen 3 notes and the profile format are in [docs/volvo-p1.md](docs/volvo-p1.md). The firmware ships no Volvo frame definitions; captures are required.
+
 ## First Setup
 
 After flashing and connecting to the web UI:
 
 1. Open **Setup**.
-2. Select the correct Haldex generation: Gen 1, Gen 2, Gen 4, or Gen 5.
+2. Select the correct Haldex generation: Gen 1, Gen 2, Gen 4, or Gen 5 for VW/Audi, or Volvo Gen 2 / Volvo Gen 3 for a Volvo P1 coupling.
 3. Save settings. This applies recommended default CAN inputs and mode trigger for that generation.
 4. Calibrate the learned Haldex output table while Haldex CAN data is live.
 5. Return to **Home** and select a mode.
@@ -313,6 +325,7 @@ Pages:
 - **Diagnostics**: controller, CAN, Haldex, frame, power, network, DTC, identity, and measured-value diagnostics
 - **Logs**: runtime logs and logging controls
 - **Setup**: generation, input mapping, dashboard mapping, CAN mode trigger, calibration
+- **Volvo DEM**: Volvo P1 frame profile editor, generator and DEM status, receive-only chassis toggle, single-frame bench sender
 - **OTA**: firmware/filesystem updates and Wi-Fi settings
 - **Help / About**: onboard documentation and project information
 
@@ -455,6 +468,7 @@ Build configuration:
 
 - `src/functions/api`: HTTP API handlers
 - `src/functions/can`: CAN receive/transmit and frame mutation paths
+- `src/functions/volvo`: Volvo P1 DEM profile loader, 29-bit frame generator, status decode
 - `src/functions/canview`: DBC decode tables and CAN View cache
 - `src/functions/core`: runtime state, modes, maps, curves, and calculations
 - `src/functions/net`: Wi-Fi and OTA update logic
@@ -463,6 +477,7 @@ Build configuration:
 - `src/functions/web`: web server and static file serving
 - `include/functions`: public headers for the firmware modules
 - `data`: LittleFS web UI and bundled maps
+- `docs`: platform guides (Volvo P1 in `docs/volvo-p1.md`)
 - `scripts`: PlatformIO helper scripts
 - `.github/workflows`: release deployment automation
 

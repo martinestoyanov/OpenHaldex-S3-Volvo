@@ -75,6 +75,16 @@ void webInit(AsyncWebServer& server) {
     }
   });
 
+  server.on("/volvo", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!fs_ok) {
+      request->send(500, "text/plain", "LittleFS not mounted");
+    } else if (LittleFS.exists("/volvo.html")) {
+      request->send(LittleFS, "/volvo.html", "text/html");
+    } else {
+      request->send(500, "text/plain", "Missing /volvo.html in LittleFS");
+    }
+  });
+
   server.on("/ota", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (!fs_ok) {
       request->send(500, "text/plain", "LittleFS not mounted");

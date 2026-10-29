@@ -2907,3 +2907,21 @@ input[type="checkbox"]:focus-visible {
     flex: 1 1 calc(50% - 8px);
   }
 }
+
+/* Volvo DEM profile editor */
+.volvo-profile-editor {
+  width: 100%;
+  min-height: 320px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.volvo-profile-editor {
+  border: 1px solid var(--control-border-strong);
+  background: var(--control-bg);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px;
+}

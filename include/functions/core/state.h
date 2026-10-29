@@ -99,6 +99,19 @@ extern uint16_t received_vehicle_rpm;
 extern uint16_t received_vehicle_boost;
 extern uint8_t haldexGeneration;
 
+// Vehicle platform selects which chassis CAN dialect the controller speaks and which
+// Haldex generations are valid. VW/Audi PQ+MQB is the historical default. Volvo P1
+// (S40/V50/C30, 2004-2012) uses a 29-bit HS-CAN matrix and Gen 2 or Gen 3 DEMs.
+enum vehicle_platform_t : uint8_t { PLATFORM_VW = 0, PLATFORM_VOLVO_P1 = 1, vehicle_platform_t_MAX };
+extern uint8_t vehiclePlatform;
+// Chassis bus receive-only mode: the controller never transmits on the vehicle bus.
+// Intended for tapping a host vehicle bus (for example a C30 HS-CAN) purely as an input source.
+extern bool chassisListenOnly;
+const char* vehiclePlatformName(uint8_t platform);
+bool vehiclePlatformFromString(const String& raw, uint8_t& platform);
+bool platformSupportsGeneration(uint8_t platform, uint8_t generation);
+bool isVolvoPlatform();
+
 // Flags
 extern bool isStandalone;
 extern bool isGen1Standalone;

@@ -14,6 +14,7 @@
 #include "functions/can/can_state.h"
 #include "functions/power/power.h"
 #include "functions/diag/uds.h"
+#include "functions/volvo/volvo_p1.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -123,10 +124,16 @@ static bool parse_mapping_frame_id(const String& frame, uint32_t& out_id) {
 }
 
 static const dbc_signal_t* active_chassis_signals() {
+  if (isVolvoPlatform()) {
+    return volvoActiveSignals();
+  }
   return (haldexGeneration == 5) ? k_vw_mqb_chassis_signals : k_vw_pq_chassis_signals;
 }
 
 static uint16_t active_chassis_signal_count() {
+  if (isVolvoPlatform()) {
+    return volvoActiveSignalCount();
+  }
   return (haldexGeneration == 5) ? k_vw_mqb_chassis_signal_count : k_vw_pq_chassis_signal_count;
 }
 
@@ -404,7 +411,7 @@ void parseCAN_chs(void* arg) {
 
       tx_msg_hdx().identifier = rx_msg_chs().identifier;
 
-      if (isStandalone) {
+      if (isStandalone && !isVolvoPlatform()) {
         switch (rx_msg_chs().identifier) {
         case diagnostics_1_ID:
         case diagnostics_2_ID:
@@ -422,7 +429,8 @@ void parseCAN_chs(void* arg) {
       }
 
       if (!isStandalone) {
-        switch (rx_msg_chs().identifier) {
+        // VW PQ/MQB fixed-position telemetry. Volvo platforms rely on mapped profile signals only.
+        if (!isVolvoPlatform()) switch (rx_msg_chs().identifier) {
         case MOTOR1_ID:
           if (!throttle_mapped_recent) {
             received_pedal_value = rx_msg_chs().data[5] * 0.4f;
@@ -505,7 +513,9 @@ void parseCAN_chs(void* arg) {
         twai_message_t original = rx_msg_chs();
 
         // STOCK: bridge unchanged. MAP: mutate known control frames for selected generation.
-        if (openhaldexEffectiveMode() != MODE_STOCK) {
+        // Volvo platforms have no bridge mutation strategy: frames pass unchanged and lock
+        // control requires standalone mode (profile-driven generator).
+        if (openhaldexEffectiveMode() != MODE_STOCK && !isVolvoPlatform()) {
           if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 5) {
             getLockData(rx_msg_chs());
             generatedFrame = !can_messages_equal(original, rx_msg_chs());
@@ -588,7 +598,10 @@ void parseCAN_hdx(void* arg) {
       }
 
       // Engagement extraction is generation-specific and follows legacy OpenHaldex behavior.
-      if (haldexGeneration == 5) {
+      // Volvo DEM status decode comes from the active profile instead.
+      if (isVolvoPlatform()) {
+        (void)volvoObserveHaldexFrame(rx_msg_hdx());
+      } else if (haldexGeneration == 5) {
         if (rx_msg_hdx().identifier == HALDEX_ID_GEN5) {
           received_haldex_engagement_raw = rx_msg_hdx().data[2];
           received_haldex_engagement = map_haldex_engagement_percent(received_haldex_engagement_raw, 0, 250);

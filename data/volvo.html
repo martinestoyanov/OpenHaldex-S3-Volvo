@@ -1,0 +1,249 @@
+<!--
+OpenHaldex-S3 Volvo DEM UI
+&copy; 2026 SpringfieldVW.com
+Licensed under the MIT License (see /data/LICENSE)
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenHaldex-S3 | Volvo DEM</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-theme="dark" data-page="volvo">
+    <div class="container">
+      <!-- Slide Menu Overlay -->
+      <nav id="main-menu" class="slide-menu" aria-label="Main menu" aria-hidden="true">
+        <div class="menu-header">
+          <button type="button" class="menu-close" aria-label="Close menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+          <div class="menu-brand">
+            <div class="brand-logo">OH</div>
+            <div class="brand-text">
+              <span class="brand-title">OpenHaldex-S3</span>
+              <span class="brand-subtitle">by springfieldvw.com</span>
+            </div>
+          </div>
+        </div>
+        <ul class="menu-items">
+          <li><a href="./index.html">Home</a></li>
+          <li><a href="./map.html">Map</a></li>
+          <li><a href="./speed.html">Speed Settings</a></li>
+          <li><a href="./throttle.html">Throttle Settings</a></li>
+          <li><a href="./rpm.html">RPM Settings</a></li>
+          <li><a href="./canview.html">CAN View</a></li>
+          <li><a href="./diag.html">Diagnostics</a></li>
+          <li><a href="./logs.html">Logs</a></li>
+          <li><a href="./setup.html">Setup</a></li>
+          <li><a href="./volvo.html">Volvo DEM</a></li>
+          <li><a href="./ota.html">OTA</a></li>
+          <li><a href="./help.html">Help</a></li>
+          <li><a href="./about.html">About</a></li>
+        </ul>
+      </nav>
+
+      <div class="menu-backdrop" hidden></div>
+
+      <!-- App Header -->
+      <header class="header">
+        <button
+          type="button"
+          class="header-btn menu-toggle"
+          aria-label="Open menu"
+          aria-controls="main-menu"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24">
+            <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" />
+          </svg>
+        </button>
+        <div class="header-brand">
+          <div class="brand-logo">OH</div>
+          <div class="brand-text">
+            <span class="brand-title">OpenHaldex-S3</span>
+            <span class="brand-subtitle">by springfieldvw.com</span>
+          </div>
+        </div>
+        <div class="header-icons">
+          <button type="button" class="header-btn fullscreen-toggle" aria-label="Enter fullscreen">
+            <svg
+              class="fullscreen-icon expand-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+              />
+            </svg>
+            <svg
+              class="fullscreen-icon compress-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"
+              />
+            </svg>
+          </button>
+          <button type="button" class="header-btn theme-toggle" aria-label="Switch theme">
+            <svg
+              class="theme-icon sun-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+            <svg
+              class="theme-icon moon-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+          <div class="header-btn wifi-icon" role="status" aria-label="Wi-Fi connected">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            >
+              <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+              <path d="M8.5 16.5a6 6 0 0 1 7 0" />
+              <circle cx="12" cy="20" r="1" fill="currentColor" stroke="none" />
+            </svg>
+          </div>
+        </div>
+      </header>
+      <main class="page-main volvo-main" aria-label="Volvo DEM profile and bench tools">
+        <div class="grid-container">
+          <div class="col-12">
+            <section class="ui-card">
+              <div class="ui-section-head">
+                <h2>Volvo P1 DEM</h2>
+                <span id="volvoPlatformStatus" class="ui-status">Loading...</span>
+              </div>
+              <div class="ui-status">
+                Volvo S40 / V50 / C30 Haldex couplings carry a Volvo DEM that speaks Volvo's 29-bit HS-CAN
+                matrix, not VW frames. This page edits the frame profile the controller generates toward the
+                DEM in standalone mode, shows what the DEM reports back, and lets you send single frames on the
+                DEM bus while bench testing. Select <strong>Volvo Gen 2</strong> or <strong>Volvo Gen 3</strong>
+                in Setup first. Read <code>docs/volvo-p1.md</code> before enabling frames.
+              </div>
+              <div class="ui-toggle-list">
+                <label class="ui-toggle-row">
+                  <input id="volvoStandalone" type="checkbox" />
+                  <span>Standalone generator (controller is the DEM's only CAN partner)</span>
+                </label>
+                <label class="ui-toggle-row">
+                  <input id="volvoListenOnly" type="checkbox" />
+                  <span>Chassis bus receive-only (tap the car's HS-CAN as input, never transmit to it)</span>
+                </label>
+              </div>
+              <div class="ui-toolbar compact">
+                <button id="volvoApplyModes" class="ui-btn">Apply</button>
+                <span id="volvoModeStatus" class="ui-status"></span>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="grid-container">
+          <div class="col-12 col-md-6">
+            <section class="ui-card">
+              <div class="ui-section-head">
+                <h2>Generator and DEM status</h2>
+                <span id="volvoGenStatus" class="ui-status">Idle</span>
+              </div>
+              <pre id="volvoStatusOutput" class="log-output">No status yet.</pre>
+            </section>
+          </div>
+          <div class="col-12 col-md-6">
+            <section class="ui-card">
+              <div class="ui-section-head">
+                <h2>Send one frame to the DEM bus</h2>
+                <span id="volvoSendStatus" class="ui-status">Idle</span>
+              </div>
+              <div class="ui-field">
+                <label for="volvoSendId">CAN ID (hex, 29-bit unless unticked)</label>
+                <input id="volvoSendId" class="ui-input" type="text" placeholder="0x0" />
+              </div>
+              <label class="ui-toggle-row">
+                <input id="volvoSendExtd" type="checkbox" checked />
+                <span>Extended 29-bit identifier</span>
+              </label>
+              <div class="ui-field">
+                <label for="volvoSendData">Data bytes (hex, space or comma separated)</label>
+                <input id="volvoSendData" class="ui-input" type="text" placeholder="00 00 00 00 00 00 00 00" />
+              </div>
+              <div class="ui-toolbar compact">
+                <button id="volvoSendBtn" class="ui-btn">Send</button>
+                <button id="volvoSendRepeatBtn" class="ui-btn secondary">Send x10 (100 ms)</button>
+              </div>
+              <div class="ui-status">
+                Frames go to the Haldex (DEM) side only. The vehicle bus is never written from here.
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="grid-container">
+          <div class="col-12">
+            <section class="ui-card">
+              <div class="ui-section-head">
+                <h2>Frame profile</h2>
+                <span id="volvoProfileStatus" class="ui-status">Idle</span>
+              </div>
+              <div class="ui-status" id="volvoProfilePath">Profile path: -</div>
+              <textarea
+                id="volvoProfileEditor"
+                class="volvo-profile-editor"
+                rows="28"
+                spellcheck="false"
+                aria-label="Volvo profile JSON"
+              ></textarea>
+              <div class="ui-toolbar compact">
+                <button id="volvoProfileSave" class="ui-btn primary">Validate and save</button>
+                <button id="volvoProfileReload" class="ui-btn secondary">Reload from device</button>
+                <button id="volvoProfileDownload" class="ui-btn secondary">Download</button>
+                <button id="volvoProfileTemplate" class="ui-btn danger">Reset to template</button>
+              </div>
+              <div class="ui-status">
+                Profile keys: <code>frames[]</code> (id, extd, dlc, periodMs, data, counter, lock, checksum,
+                enabled), <code>status</code> (DEM status frame decode), <code>signals[]</code> (decode
+                entries for CAN View and Setup mapping). Saving validates on the device and applies live
+                without a reboot.
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <footer class="footer">
+        <div>OpenHaldex-S3 &copy; SpringfieldVW.com</div>
+      </footer>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>

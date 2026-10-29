@@ -35,6 +35,51 @@ uint16_t received_vehicle_speed = 0;
 uint16_t received_vehicle_rpm = 0;
 uint16_t received_vehicle_boost = 0;
 uint8_t haldexGeneration = 0;
+uint8_t vehiclePlatform = PLATFORM_VW;
+bool chassisListenOnly = false;
+
+const char* vehiclePlatformName(uint8_t platform) {
+  switch (platform) {
+  case PLATFORM_VW:
+    return "vw";
+  case PLATFORM_VOLVO_P1:
+    return "volvo_p1";
+  default:
+    return "unknown";
+  }
+}
+
+bool vehiclePlatformFromString(const String& raw, uint8_t& platform) {
+  String token = raw;
+  token.trim();
+  token.toLowerCase();
+  if (token == "vw" || token == "vag" || token == "vw_pq" || token == "vw_mqb" || token == "0") {
+    platform = PLATFORM_VW;
+    return true;
+  }
+  if (token == "volvo_p1" || token == "volvo" || token == "volvo-p1" || token == "p1" || token == "1") {
+    platform = PLATFORM_VOLVO_P1;
+    return true;
+  }
+  return false;
+}
+
+bool platformSupportsGeneration(uint8_t platform, uint8_t generation) {
+  switch (platform) {
+  case PLATFORM_VW:
+    // VAG never fitted Gen 3 in this application.
+    return generation == 1 || generation == 2 || generation == 4 || generation == 5;
+  case PLATFORM_VOLVO_P1:
+    // P1 shipped with Gen 2; Gen 3 DEMs are a common forum-documented upgrade.
+    return generation == 2 || generation == 3;
+  default:
+    return false;
+  }
+}
+
+bool isVolvoPlatform() {
+  return vehiclePlatform == PLATFORM_VOLVO_P1;
+}
 
 bool isStandalone = false;
 bool isGen1Standalone = false;

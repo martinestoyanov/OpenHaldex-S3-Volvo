@@ -4,6 +4,7 @@
 #include "functions/canview/vw_pq_chassis_dbc.h"
 #include "functions/core/state.h"
 #include "functions/storage/filelog.h"
+#include "functions/volvo/volvo_p1.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -172,11 +173,45 @@ static bool canview_find_frame(uint32_t id, const canview_frame_t* cache, uint8_
 }
 
 static const dbc_signal_t* canview_active_chassis_signals() {
+  if (isVolvoPlatform()) {
+    return volvoActiveSignals();
+  }
   return (haldexGeneration == 5) ? k_vw_mqb_chassis_signals : k_vw_pq_chassis_signals;
 }
 
 static uint16_t canview_active_chassis_signal_count() {
+  if (isVolvoPlatform()) {
+    return volvoActiveSignalCount();
+  }
   return (haldexGeneration == 5) ? k_vw_mqb_chassis_signal_count : k_vw_pq_chassis_signal_count;
+}
+
+// Haldex status frame decode shared by the decoded-signal list and mapped-signal resolver.
+// Returns false when the frame carries no known status layout for the active platform/generation.
+static bool canview_decode_haldex_status(const canview_frame_t& frame, uint8_t& state, uint16_t& raw) {
+  if (isVolvoPlatform()) {
+    twai_message_t msg = {};
+    msg.identifier = frame.id;
+    msg.extd = frame.extd;
+    msg.data_length_code = frame.dlc;
+    for (uint8_t i = 0; i < 8; i++) {
+      msg.data[i] = frame.data[i];
+    }
+    return volvoDecodeStatusFrame(msg, raw, state);
+  }
+  state = (haldexGeneration == 5) ? frame.data[3] : frame.data[0];
+  raw = (haldexGeneration == 5) ? frame.data[2] : frame.data[1];
+  if (haldexGeneration == 2) {
+    raw = (uint16_t)(frame.data[1] + frame.data[4]);
+  }
+  return true;
+}
+
+static uint32_t canview_haldex_status_id() {
+  if (isVolvoPlatform()) {
+    return volvoStatusFrameId();
+  }
+  return (haldexGeneration == 5) ? HALDEX_ID_GEN5 : 0x704;
 }
 
 bool canviewGetLastTxFrame(uint8_t bus, uint32_t id, canview_last_tx_t& out) {
@@ -448,7 +483,11 @@ bool canviewResolveMappedSignal(const String& key, canview_resolved_signal_t& ou
   out.ageMs = millis() - frame.ts;
 
   if (signal_name == "haldex state") {
-    uint8_t state = (haldexGeneration == 5) ? frame.data[3] : frame.data[0];
+    uint8_t state = 0;
+    uint16_t raw = 0;
+    if (!canview_decode_haldex_status(frame, state, raw)) {
+      return false;
+    }
     out.found = true;
     out.name = "Haldex state";
     out.textValue = canview_haldex_state_label(state);
@@ -456,9 +495,10 @@ bool canviewResolveMappedSignal(const String& key, canview_resolved_signal_t& ou
   }
 
   if (signal_name == "engagement") {
-    uint16_t raw = (haldexGeneration == 5) ? frame.data[2] : frame.data[1];
-    if (haldexGeneration == 2) {
-      raw = (uint16_t)(frame.data[1] + frame.data[4]);
+    uint8_t state = 0;
+    uint16_t raw = 0;
+    if (!canview_decode_haldex_status(frame, state, raw)) {
+      return false;
     }
     out.found = true;
     out.numeric = true;
@@ -544,7 +584,10 @@ String canviewBuildJson(uint16_t decoded_limit, uint8_t raw_limit, const String&
   };
 
   auto append_haldex_known = [&](const canview_frame_t* cache, uint8_t cache_size, const char* bus, const char* dir) {
-    const uint32_t haldex_status_id = (haldexGeneration == 5) ? HALDEX_ID_GEN5 : 0x704;
+    const uint32_t haldex_status_id = canview_haldex_status_id();
+    if (haldex_status_id == 0) {
+      return;
+    }
     canview_frame_t hframe;
     if (!canview_find_frame(haldex_status_id, cache, cache_size, hframe)) {
       return;
@@ -552,10 +595,10 @@ String canviewBuildJson(uint16_t decoded_limit, uint8_t raw_limit, const String&
     if ((now - hframe.ts) > CANVIEW_STALE_MS) {
       return;
     }
-    uint8_t state = (haldexGeneration == 5) ? hframe.data[3] : hframe.data[0];
-    uint16_t raw = (haldexGeneration == 5) ? hframe.data[2] : hframe.data[1];
-    if (haldexGeneration == 2) {
-      raw = (uint16_t)(hframe.data[1] + hframe.data[4]);
+    uint8_t state = 0;
+    uint16_t raw = 0;
+    if (!canview_decode_haldex_status(hframe, state, raw)) {
+      return;
     }
 
     String busStr = canview_escape_json(String(bus));

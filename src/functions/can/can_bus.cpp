@@ -18,6 +18,11 @@ static MCP2515 can_mcp(MCP2515_CS, 10000000, &SPI);
 
 static uint32_t last_can_chs_tx_error_log_ms = 0;
 static uint32_t last_can_hdx_tx_error_log_ms = 0;
+static twai_mode_t g_chassis_mode_applied = TWAI_MODE_NO_ACK;
+
+static twai_mode_t chassis_mode_from_settings() {
+  return chassisListenOnly ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NO_ACK;
+}
 
 static bool can_rate_limited(uint32_t& last_log_ms, uint32_t interval_ms = 1000) {
   const uint32_t now = millis();
@@ -67,6 +72,10 @@ static void can_deinit_twai_bus(twai_handle_t& handle) {
 }
 
 bool chassis_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
+  if (chassisListenOnly) {
+    // Receive-only tap of the vehicle bus: never transmit toward the car.
+    return false;
+  }
   if (!can_bus_0()) {
     if (!can_rate_limited(last_can_chs_tx_error_log_ms)) {
       LOG_WARN("can", "CHS TX skipped: bus 0 unavailable id=0x%lX", (unsigned long)msg.identifier);
@@ -164,7 +173,22 @@ bool canInitChassisOnly(twai_mode_t mode) {
   can0_ready = false;
   can_ready = false;
   can0_ready = can_init_bus(0, CAN1_TX, CAN1_RX, &can_bus_0(), mode);
+  if (can0_ready) {
+    g_chassis_mode_applied = mode;
+  }
   return can0_ready;
+}
+
+bool canApplyChassisModeFromSettings() {
+  const twai_mode_t desired = chassis_mode_from_settings();
+  if (can0_ready && g_chassis_mode_applied == desired) {
+    return true;
+  }
+  const bool haldex_ready = can1_ready;
+  const bool ok = canInitChassisOnly(desired);
+  can_ready = ok && haldex_ready;
+  LOG_INFO("can", "chassis bus mode=%s ready=%d", desired == TWAI_MODE_LISTEN_ONLY ? "listen-only" : "normal", ok ? 1 : 0);
+  return ok;
 }
 
 static bool can_init_haldex_bus() {
@@ -238,7 +262,7 @@ void canInit() {
   can1_ready = false;
 
   // Chassis bus (logical bus 0) on internal TWAI.
-  can0_ready = canInitChassisOnly(TWAI_MODE_NO_ACK);
+  can0_ready = canInitChassisOnly(chassis_mode_from_settings());
   if (!can0_ready) {
     DEBUG("CAN chassis (TWAI) init failed");
     return;

@@ -758,6 +758,7 @@ function initSetupPage() {
   let modeTrigger = { ...defaultModeTrigger };
   let lowPower = { ...defaultLowPower };
   let currentHaldexGen = "";
+  let currentPlatform = "vw";
   let pollTimer = null;
   let pollBusy = false;
   let deferredSignalPickerRender = false;
@@ -913,12 +914,40 @@ function initSetupPage() {
     return `${busToken}|${frameToken}|${signalToken}|${unitToken}`;
   }
 
-  function isValidHaldexGen(gen) {
+  function normalizePlatform(raw) {
+    const token = String(raw || "")
+      .trim()
+      .toLowerCase();
+    if (token === "volvo_p1" || token === "volvo" || token === "volvo-p1" || token === "p1" || token === "1") {
+      return "volvo_p1";
+    }
+    return "vw";
+  }
+
+  function isValidHaldexGen(gen, platform = currentPlatform) {
     const value = String(gen || "");
+    if (normalizePlatform(platform) === "volvo_p1") {
+      return value === "2" || value === "3";
+    }
     return value === "1" || value === "2" || value === "4" || value === "5";
   }
 
+  function currentGenLabel() {
+    if (!isValidHaldexGen(currentHaldexGen)) {
+      return "";
+    }
+    return currentPlatform === "volvo_p1" ? `Volvo Gen ${currentHaldexGen}` : `Gen ${currentHaldexGen}`;
+  }
+
+  function isVwGen5() {
+    return currentPlatform === "vw" && String(currentHaldexGen || "") === "5";
+  }
+
   function getRecommendedMappingsForGen(gen) {
+    if (currentPlatform !== "vw") {
+      // Volvo P1 decode signals come from the DEM profile; nothing to recommend.
+      return { ...defaultMappings };
+    }
     switch (String(gen || "")) {
       case "1":
       case "2":
@@ -962,6 +991,9 @@ function initSetupPage() {
       mode: "MAP",
       broadcastOpenHaldexOverCAN: true,
     };
+    if (currentPlatform !== "vw") {
+      return { ...base, signal: "" };
+    }
     switch (String(gen || "")) {
       case "1":
       case "2":
@@ -1109,6 +1141,7 @@ function initSetupPage() {
   function writeProfile() {
     const profile = {
       haldexGeneration: isValidHaldexGen(currentHaldexGen) ? Number(currentHaldexGen) : "",
+      vehiclePlatform: currentPlatform,
       mappings,
       dashMappings,
       modeTrigger,
@@ -1281,7 +1314,7 @@ function initSetupPage() {
       return;
     }
     haldexGenValue.textContent = isValidHaldexGen(currentHaldexGen)
-      ? `Gen ${currentHaldexGen}`
+      ? currentGenLabel()
       : "Select generation";
   }
 
@@ -1290,8 +1323,10 @@ function initSetupPage() {
       return;
     }
     haldexGenMenu.querySelectorAll("[data-haldex-gen]").forEach((item) => {
+      const itemPlatform = normalizePlatform(item.getAttribute("data-platform") || "vw");
       const active =
         isValidHaldexGen(currentHaldexGen) &&
+        itemPlatform === currentPlatform &&
         String(item.getAttribute("data-haldex-gen") || "") === currentHaldexGen;
       item.classList.toggle("is-selected", active);
       item.setAttribute("aria-selected", String(active));
@@ -1374,7 +1409,7 @@ function initSetupPage() {
       return;
     }
     lowPowerSleepEnabled.checked = Boolean(lowPower.sleepEnabled);
-    const gen5 = String(currentHaldexGen || "") === "5";
+    const gen5 = isVwGen5();
     if (gen5 && lowPower.sleepEnabled) {
       setLowPowerStatus("Parked sleep will arm after saving Gen 5 setup.");
     } else if (gen5) {
@@ -1439,6 +1474,7 @@ function initSetupPage() {
 
     const payload = {
       haldexGeneration: Number(currentHaldexGen),
+      vehiclePlatform: currentPlatform,
       inputMappings: {
         speed: mappings.speed || "",
         throttle: mappings.throttle || "",
@@ -1474,6 +1510,9 @@ function initSetupPage() {
           rpm: String(apiMappings.rpm || ""),
         };
         writeProfile();
+      }
+      if (resp?.vehiclePlatform) {
+        currentPlatform = normalizePlatform(resp.vehiclePlatform);
       }
       const apiGen = String(resp?.haldexGeneration || "");
       if (isValidHaldexGen(apiGen)) {
@@ -1512,19 +1551,30 @@ function initSetupPage() {
     }
   }
 
-  async function applyGenerationSelection(nextGen) {
+  async function applyGenerationSelection(nextGen, nextPlatform = currentPlatform) {
     const next = String(nextGen || "");
-    if (!isValidHaldexGen(next)) {
+    const platform = normalizePlatform(nextPlatform);
+    if (!isValidHaldexGen(next, platform)) {
       return;
+    }
+    const platformChanged = platform !== currentPlatform;
+    currentPlatform = platform;
+    if (platformChanged) {
+      // Signal keys from the other platform's DBC are meaningless here.
+      mappings = { ...defaultMappings };
+      modeTrigger = { ...defaultModeTrigger };
     }
 
     applyRecommendedMappingsForGen(next, true);
     applyRecommendedModeTriggerForGen(next, true);
     lowPower = {
       ...lowPower,
-      sleepEnabled: next === "5",
+      sleepEnabled: platform === "vw" && next === "5",
     };
-    const message = `Generation set: Gen ${next}. Recommended signals applied.`;
+    const message =
+      platform === "volvo_p1"
+        ? `Generation set: Volvo Gen ${next}. Save, then build the DEM profile on the Volvo DEM page.`
+        : `Generation set: Gen ${next}. Recommended signals applied.`;
 
     currentHaldexGen = next;
     writeProfile();
@@ -1629,7 +1679,7 @@ function initSetupPage() {
     modeTrigger = normalizeModeTrigger(getRecommendedModeTriggerForGen(currentHaldexGen));
     lowPower = {
       ...lowPower,
-      sleepEnabled: currentHaldexGen === "5",
+      sleepEnabled: isVwGen5(),
     };
     writeProfile();
     renderAll();
@@ -1691,6 +1741,9 @@ function initSetupPage() {
     if (profile?.lowPower && typeof profile.lowPower === "object") {
       lowPower = normalizeLowPower(profile.lowPower);
     }
+    if (profile?.vehiclePlatform) {
+      currentPlatform = normalizePlatform(profile.vehiclePlatform);
+    }
     const storedGen = String(profile?.haldexGeneration || "");
     if (isValidHaldexGen(storedGen)) {
       currentHaldexGen = storedGen;
@@ -1715,6 +1768,9 @@ function initSetupPage() {
             Object.entries(apiDashMappings).map(([key, value]) => [key, String(value || "")])
           ),
         };
+      }
+      if (status?.vehiclePlatform) {
+        currentPlatform = normalizePlatform(status.vehiclePlatform);
       }
       const apiGen = String(status?.haldexGeneration || "");
       if (isValidHaldexGen(apiGen)) {
@@ -1745,8 +1801,8 @@ function initSetupPage() {
         const ok = await saveSetupToDevice();
         setStatus(
           ok
-            ? `Recommended signals loaded for Gen ${currentHaldexGen}.`
-            : `Recommended signals loaded for Gen ${currentHaldexGen}. Save failed on device.`,
+            ? `Recommended signals loaded for ${currentGenLabel()}.`
+            : `Recommended signals loaded for ${currentGenLabel()}. Save failed on device.`,
           !ok
         );
       }
@@ -1782,7 +1838,8 @@ function initSetupPage() {
         return;
       }
       const next = String(button.getAttribute("data-haldex-gen") || "");
-      await applyGenerationSelection(next);
+      const nextPlatform = button.getAttribute("data-platform") || "vw";
+      await applyGenerationSelection(next, nextPlatform);
     });
   }
 
@@ -1876,7 +1933,7 @@ function initSetupPage() {
     renderAll();
     setStatus(
       isValidHaldexGen(currentHaldexGen)
-        ? `Generation loaded: Gen ${currentHaldexGen}. Optional signal mapping is below.`
+        ? `Generation loaded: ${currentGenLabel()}. Optional signal mapping is below.`
         : "Select generation, then save. Optional signal mapping is below.",
       !isValidHaldexGen(currentHaldexGen)
     );
@@ -3412,6 +3469,7 @@ if (pageName === "map" && typeof initMapPage === "function") initMapPage();
 if (pageName === "canview" && typeof initCanviewPage === "function") initCanviewPage();
 if (pageName === "diag" && typeof initDiagPage === "function") initDiagPage();
 if (pageName === "ota" && typeof initOtaPage === "function") initOtaPage();
+if (pageName === "volvo" && typeof initVolvoPage === "function") initVolvoPage();
 initSetupPage();
 initLearnCalibration();
 initLogsPage();
@@ -4905,7 +4963,10 @@ function initDiagPage() {
       el("mode").textContent = data.mode || "-";
       el("controllerEnabled").innerHTML = pill(!data.disableController);
       el("broadcast").innerHTML = pill(data.broadcastOpenHaldexOverCAN);
-      el("haldexGen").textContent = data.haldexGeneration ?? "-";
+      el("haldexGen").textContent =
+        data.vehiclePlatform === "volvo_p1"
+          ? `Volvo P1 / Gen ${data.haldexGeneration ?? "-"}`
+          : (data.haldexGeneration ?? "-");
 
       const tel = data.telemetry || {};
       el("spec").textContent = fmt(tel.spec);
@@ -5267,4 +5328,276 @@ function initOtaPage() {
   loadWifi();
   refreshUpdate();
   setInterval(refreshUpdate, 2000);
+}
+
+
+// Volvo DEM page controller: standalone/listen-only toggles, generator status, raw send, profile editor.
+function initVolvoPage() {
+  const el = (id) => document.getElementById(id);
+  const standalone = el("volvoStandalone");
+  const listenOnly = el("volvoListenOnly");
+  const applyModes = el("volvoApplyModes");
+  const modeStatus = el("volvoModeStatus");
+  const platformStatus = el("volvoPlatformStatus");
+  const genStatus = el("volvoGenStatus");
+  const statusOutput = el("volvoStatusOutput");
+  const sendId = el("volvoSendId");
+  const sendExtd = el("volvoSendExtd");
+  const sendData = el("volvoSendData");
+  const sendBtn = el("volvoSendBtn");
+  const sendRepeatBtn = el("volvoSendRepeatBtn");
+  const sendStatus = el("volvoSendStatus");
+  const editor = el("volvoProfileEditor");
+  const profileStatus = el("volvoProfileStatus");
+  const profilePath = el("volvoProfilePath");
+  const saveBtn = el("volvoProfileSave");
+  const reloadBtn = el("volvoProfileReload");
+  const downloadBtn = el("volvoProfileDownload");
+  const templateBtn = el("volvoProfileTemplate");
+  if (!editor || !statusOutput) {
+    return;
+  }
+
+  let pollTimer = null;
+  let editorDirty = false;
+  let lastVolvo = null;
+
+  const setText = (node, text) => {
+    if (node) {
+      node.textContent = text;
+    }
+  };
+
+  function fmtAge(ms) {
+    const n = Number(ms || 0);
+    if (!n) {
+      return "never";
+    }
+    if (n < 1000) {
+      return `${n} ms ago`;
+    }
+    return `${(n / 1000).toFixed(1)} s ago`;
+  }
+
+  function renderStatus(data) {
+    const v = data?.volvo || {};
+    lastVolvo = v;
+    const platformOk = Boolean(v.active);
+    setText(
+      platformStatus,
+      platformOk
+        ? `Volvo P1 / Gen ${v.haldexGeneration ?? "-"} selected`
+        : `Platform is ${v.platform || "vw"}: select Volvo Gen 2 or Volvo Gen 3 in Setup`
+    );
+    if (platformStatus) {
+      platformStatus.classList.toggle("pending", !platformOk);
+    }
+    if (standalone && document.activeElement !== standalone) {
+      standalone.checked = Boolean(data?.isStandalone);
+    }
+    if (listenOnly && document.activeElement !== listenOnly) {
+      listenOnly.checked = Boolean(data?.chassisListenOnly);
+    }
+    setText(
+      genStatus,
+      v.generatorRunning
+        ? `Generating ${v.enabledFrameCount ?? 0}/${v.frameCount ?? 0} frames`
+        : platformOk
+          ? data?.isStandalone
+            ? "Standalone but no profile loaded"
+            : "Generator idle (standalone off)"
+          : "Inactive"
+    );
+    const lines = [];
+    lines.push(`Profile: ${v.name || "-"} (${v.profilePath || "-"})`);
+    lines.push(`Loaded: ${v.loaded ? "yes" : "no"}${v.lastError ? `  error: ${v.lastError}` : ""}`);
+    lines.push(
+      `Mode: ${data?.mode || "-"}  lock target: ${Number(data?.lockTarget || 0).toFixed(1)} %  standalone: ${
+        data?.isStandalone ? "on" : "off"
+      }  chassis listen-only: ${data?.chassisListenOnly ? "on" : "off"}`
+    );
+    lines.push(
+      `CAN ready: ${data?.canReady ? "yes" : "no"}  haldex bus traffic: ${
+        data?.hasCANHaldex ? "yes" : "no"
+      }  chassis bus traffic: ${data?.hasCANChassis ? "yes" : "no"}`
+    );
+    const st = v.status || {};
+    lines.push("");
+    lines.push(
+      `DEM status frame ${st.enabled ? st.id : "(not configured)"}: seen ${st.count || 0}x, last ${fmtAge(
+        st.ageMs
+      )}`
+    );
+    lines.push(
+      `  engagement raw ${st.engagementRaw ?? "-"}  -> ${st.engagement ?? "-"} %   state byte ${st.state ?? "-"}`
+    );
+    lines.push("");
+    lines.push(`Frames (${v.enabledFrameCount ?? 0} enabled of ${v.frameCount ?? 0}, ${v.txCount ?? 0} sent):`);
+    (Array.isArray(v.frames) ? v.frames : []).forEach((f) => {
+      lines.push(
+        `  ${f.enabled ? "[on ]" : "[off]"} ${String(f.id).padEnd(12)} ${String(f.periodMs).padStart(4)} ms  dlc ${
+          f.dlc
+        }  lock:${f.lockBytes}  ctr:${f.counter ? "y" : "n"}  ck:${f.checksum}  tx ${f.txCount}  ${fmtAge(
+          f.ageMs
+        )}  ${f.name}`
+      );
+    });
+    lines.push(`Decode signals: ${v.signalCount ?? 0}   raw frames sent from this page: ${v.rawTxCount ?? 0}`);
+    statusOutput.textContent = lines.join("\n");
+  }
+
+  async function poll() {
+    try {
+      const data = await apiJson("/api/volvo/status");
+      renderStatus(data);
+    } catch (error) {
+      setText(genStatus, `Status failed: ${error.message}`);
+    }
+  }
+
+  async function loadProfile(force = false) {
+    if (editorDirty && !force) {
+      return;
+    }
+    try {
+      const text = await apiText("/api/volvo/profile");
+      try {
+        editor.value = JSON.stringify(JSON.parse(text), null, 2);
+      } catch {
+        editor.value = text;
+      }
+      editorDirty = false;
+      setText(profileStatus, "Loaded from device");
+    } catch (error) {
+      setText(profileStatus, `No profile on device (${error.message}). Reset to template to create one.`);
+    }
+    setText(profilePath, `Profile path: ${lastVolvo?.profilePath || "-"}`);
+  }
+
+  async function saveProfile() {
+    let body = editor.value;
+    try {
+      body = JSON.stringify(JSON.parse(editor.value));
+    } catch (error) {
+      setText(profileStatus, `Not valid JSON: ${error.message}`);
+      return;
+    }
+    setText(profileStatus, "Validating on device...");
+    try {
+      const resp = await apiJson("/api/volvo/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      editorDirty = false;
+      setText(profileStatus, `Saved and applied (${resp?.volvo?.frameCount ?? 0} frames)`);
+      await loadProfile(true);
+      await poll();
+    } catch (error) {
+      setText(profileStatus, `Rejected: ${error.message}`);
+    }
+  }
+
+  async function resetTemplate() {
+    if (!window.confirm("Overwrite the device profile for this generation with the template?")) {
+      return;
+    }
+    try {
+      await apiJson("/api/volvo/profile/reset", { method: "POST" });
+      editorDirty = false;
+      await loadProfile(true);
+      await poll();
+      setText(profileStatus, "Template written");
+    } catch (error) {
+      setText(profileStatus, `Reset failed: ${error.message}`);
+    }
+  }
+
+  function downloadProfile() {
+    const blob = new Blob([editor.value], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `volvo-dem-gen${lastVolvo?.haldexGeneration ?? "x"}-profile.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function applyModeToggles() {
+    setText(modeStatus, "Applying...");
+    try {
+      await apiJson("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isStandalone: Boolean(standalone?.checked),
+          chassisListenOnly: Boolean(listenOnly?.checked),
+        }),
+      });
+      setText(modeStatus, "Applied");
+      await poll();
+    } catch (error) {
+      setText(modeStatus, `Failed: ${error.message}`);
+    }
+  }
+
+  async function sendOnce() {
+    const id = String(sendId?.value || "").trim();
+    if (!id) {
+      setText(sendStatus, "Enter a CAN ID");
+      return false;
+    }
+    const data = String(sendData?.value || "")
+      .replace(/0x/gi, "")
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .join(",");
+    try {
+      await apiJson("/api/volvo/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, extd: Boolean(sendExtd?.checked), data }),
+      });
+      setText(sendStatus, `Sent ${id}`);
+      return true;
+    } catch (error) {
+      setText(sendStatus, `Send failed: ${error.message}`);
+      return false;
+    }
+  }
+
+  async function sendRepeat() {
+    for (let i = 0; i < 10; i++) {
+      const ok = await sendOnce();
+      if (!ok) {
+        return;
+      }
+      setText(sendStatus, `Sent ${i + 1}/10`);
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
+  }
+
+  editor.addEventListener("input", () => {
+    editorDirty = true;
+    setText(profileStatus, "Edited (not saved)");
+  });
+  if (saveBtn) saveBtn.addEventListener("click", saveProfile);
+  if (reloadBtn) reloadBtn.addEventListener("click", () => loadProfile(true));
+  if (downloadBtn) downloadBtn.addEventListener("click", downloadProfile);
+  if (templateBtn) templateBtn.addEventListener("click", resetTemplate);
+  if (applyModes) applyModes.addEventListener("click", applyModeToggles);
+  if (sendBtn) sendBtn.addEventListener("click", sendOnce);
+  if (sendRepeatBtn) sendRepeatBtn.addEventListener("click", sendRepeat);
+
+  poll()
+    .then(() => loadProfile(true))
+    .finally(() => {
+      pollTimer = window.setInterval(poll, 1000);
+      window.addEventListener("beforeunload", () => {
+        if (pollTimer) {
+          window.clearInterval(pollTimer);
+        }
+      });
+    });
 }

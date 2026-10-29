@@ -408,6 +408,8 @@ void storageLoad() {
     pref.putBool("disableControl", disableController);
 
     pref.putUChar("haldexGen", haldexGeneration);
+    pref.putUChar("vehiclePlat", vehiclePlatform);
+    pref.putBool("chsListenOnly", chassisListenOnly);
     pref.putUChar("lastMode", (uint8_t)state.mode);
     pref.putUChar(MODE_SCHEMA_KEY, MODE_SCHEMA_VERSION);
     pref.putUChar("disableThrottle", disableThrottle);
@@ -463,6 +465,11 @@ void storageLoad() {
     disableController = pref.getBool("disableControl", disableController);
 
     haldexGeneration = pref.getUChar("haldexGen", haldexGeneration);
+    vehiclePlatform = pref.getUChar("vehiclePlat", vehiclePlatform);
+    if (vehiclePlatform >= vehicle_platform_t_MAX) {
+      vehiclePlatform = PLATFORM_VW;
+    }
+    chassisListenOnly = pref.getBool("chsListenOnly", chassisListenOnly);
     uint8_t mode_schema = pref.getUChar(MODE_SCHEMA_KEY, MODE_SCHEMA_UNKNOWN);
     if (mode_schema == MODE_SCHEMA_UNKNOWN) {
       bool has_v2_keys = pref.isKey(SPEED_CURVE_COUNT_KEY) || pref.isKey(THROTTLE_CURVE_COUNT_KEY) ||
@@ -604,8 +611,9 @@ void storageLoad() {
       state.mode = MODE_STOCK;
       LOG_WARN("storage", "Verbose debug profile active at boot; forcing STOCK controller-off");
     }
-    LOG_INFO("storage", "Settings loaded mode=%s gen=%d disableControl=%d", get_openhaldex_mode_string(state.mode),
-             haldexGeneration, disableController ? 1 : 0);
+    LOG_INFO("storage", "Settings loaded mode=%s platform=%s gen=%d disableControl=%d listenOnly=%d",
+             get_openhaldex_mode_string(state.mode), vehiclePlatformName(vehiclePlatform), haldexGeneration,
+             disableController ? 1 : 0, chassisListenOnly ? 1 : 0);
   }
 
 #if detailedDebugEEP
@@ -633,6 +641,8 @@ void storageSave() {
 
   lastMode = (uint8_t)state.mode;
   pref.putUChar("haldexGen", haldexGeneration);
+  pref.putUChar("vehiclePlat", vehiclePlatform);
+  pref.putBool("chsListenOnly", chassisListenOnly);
   pref.putUChar("lastMode", lastMode);
   pref.putUChar(MODE_SCHEMA_KEY, MODE_SCHEMA_VERSION);
   pref.putUChar("disableThrottle", disableThrottle);
