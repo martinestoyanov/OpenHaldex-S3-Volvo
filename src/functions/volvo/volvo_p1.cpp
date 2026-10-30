@@ -46,6 +46,34 @@ struct volvo_checksum_t {
   uint8_t to;
 };
 
+// Live-value injection: re-encode a mapped controller input into a bit field of a generated frame.
+// This is how real host-vehicle data (for example a 2011 C30 bus) is translated into the dialect
+// the DEM expects (for example the 2005 S40 matrix).
+enum volvo_inject_source_t : uint8_t {
+  VOLVO_SRC_SPEED = 0,  // received_vehicle_speed, km/h
+  VOLVO_SRC_THROTTLE,   // received_pedal_value, %
+  VOLVO_SRC_RPM,        // received_vehicle_rpm
+  VOLVO_SRC_LOCK,       // lock_target, % requested lock
+  VOLVO_SRC_ENGAGEMENT, // received_haldex_engagement, % reported by the DEM
+  VOLVO_SRC_CONST,      // constant engineering value (useful for fixed plausible inputs)
+};
+
+struct volvo_inject_t {
+  volvo_inject_source_t source;
+  uint16_t start_bit;
+  uint8_t length;
+  bool little_endian;
+  bool is_signed;
+  float factor;
+  float offset;
+  float lock_gain; // value *= 1 + lock_gain * lock_target / 100 (fake slip proportional to request)
+  float value;     // VOLVO_SRC_CONST only
+  float min;       // engineering-unit clamp, ignored when max <= min
+  float max;
+};
+
+#define VOLVO_MAX_INJECT 6
+
 struct volvo_frame_t {
   char name[VOLVO_NAME_LEN];
   bool enabled;
@@ -57,6 +85,8 @@ struct volvo_frame_t {
   volvo_counter_t counter;
   uint8_t lock_count;
   volvo_lock_byte_t lock[VOLVO_MAX_LOCK_BYTES];
+  uint8_t inject_count;
+  volvo_inject_t inject[VOLVO_MAX_INJECT];
   volvo_checksum_t checksum;
   // runtime
   uint32_t last_tx_ms;
@@ -254,6 +284,148 @@ static const char* checksumTypeName(volvo_checksum_type_t type) {
   }
 }
 
+static bool parseInjectSource(const char* text, volvo_inject_source_t& out) {
+  String token = String(text ? text : "");
+  token.trim();
+  token.toLowerCase();
+  if (token == "speed") {
+    out = VOLVO_SRC_SPEED;
+  } else if (token == "throttle" || token == "pedal") {
+    out = VOLVO_SRC_THROTTLE;
+  } else if (token == "rpm") {
+    out = VOLVO_SRC_RPM;
+  } else if (token == "lock") {
+    out = VOLVO_SRC_LOCK;
+  } else if (token == "engagement") {
+    out = VOLVO_SRC_ENGAGEMENT;
+  } else if (token == "const" || token == "constant") {
+    out = VOLVO_SRC_CONST;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+static const char* injectSourceName(volvo_inject_source_t source) {
+  switch (source) {
+  case VOLVO_SRC_SPEED:
+    return "speed";
+  case VOLVO_SRC_THROTTLE:
+    return "throttle";
+  case VOLVO_SRC_RPM:
+    return "rpm";
+  case VOLVO_SRC_LOCK:
+    return "lock";
+  case VOLVO_SRC_ENGAGEMENT:
+    return "engagement";
+  default:
+    return "const";
+  }
+}
+
+// Inverse of dbc_extract_raw: write `length` bits of `raw` starting at `start_bit`.
+// Big-endian follows the same sequential bit walk dbc_extract_raw uses, so a field that decodes
+// with the profile's signal definition packs back identically.
+static void packRaw(uint8_t* data, uint16_t start_bit, uint8_t length, bool little_endian, uint64_t raw) {
+  if (length == 0 || length > 64) {
+    return;
+  }
+  if (little_endian) {
+    for (uint8_t i = 0; i < length; i++) {
+      const uint16_t pos = (uint16_t)(start_bit + i);
+      if (pos >= 64) {
+        break;
+      }
+      const uint8_t bit = (uint8_t)((raw >> i) & 0x01);
+      if (bit) {
+        data[pos / 8] |= (uint8_t)(1U << (pos % 8));
+      } else {
+        data[pos / 8] &= (uint8_t)~(1U << (pos % 8));
+      }
+    }
+    return;
+  }
+  for (uint8_t i = 0; i < length; i++) {
+    const int bit_index = (int)start_bit - (int)i;
+    if (bit_index < 0 || bit_index >= 64) {
+      break;
+    }
+    const int byte_index = bit_index / 8;
+    const int bit_in_byte = 7 - (bit_index % 8);
+    const uint8_t bit = (uint8_t)((raw >> (length - 1 - i)) & 0x01);
+    if (bit) {
+      data[byte_index] |= (uint8_t)(1U << bit_in_byte);
+    } else {
+      data[byte_index] &= (uint8_t)~(1U << bit_in_byte);
+    }
+  }
+}
+
+static float injectSourceValue(const volvo_inject_t& inj) {
+  switch (inj.source) {
+  case VOLVO_SRC_SPEED:
+    return (float)received_vehicle_speed;
+  case VOLVO_SRC_THROTTLE:
+    return received_pedal_value;
+  case VOLVO_SRC_RPM:
+    return (float)received_vehicle_rpm;
+  case VOLVO_SRC_LOCK:
+    return lock_target;
+  case VOLVO_SRC_ENGAGEMENT:
+    return (float)received_haldex_engagement;
+  default:
+    return inj.value;
+  }
+}
+
+static void applyInject(const volvo_inject_t& inj, uint8_t* data) {
+  float value = injectSourceValue(inj);
+  if (inj.lock_gain != 0.0f) {
+    float lock = lock_target;
+    if (lock < 0.0f) {
+      lock = 0.0f;
+    }
+    if (lock > 100.0f) {
+      lock = 100.0f;
+    }
+    value *= (1.0f + inj.lock_gain * lock / 100.0f);
+  }
+  if (inj.max > inj.min) {
+    if (value < inj.min) {
+      value = inj.min;
+    }
+    if (value > inj.max) {
+      value = inj.max;
+    }
+  }
+  const float factor = (inj.factor == 0.0f) ? 1.0f : inj.factor;
+  float raw_f = (value - inj.offset) / factor;
+  raw_f = (raw_f >= 0.0f) ? (raw_f + 0.5f) : (raw_f - 0.5f);
+  const uint64_t field_mask = (inj.length >= 64) ? ~0ULL : ((1ULL << inj.length) - 1ULL);
+  uint64_t raw = 0;
+  if (inj.is_signed) {
+    const int64_t max_v = (int64_t)(field_mask >> 1);
+    const int64_t min_v = -max_v - 1;
+    int64_t sv = (int64_t)raw_f;
+    if (sv > max_v) {
+      sv = max_v;
+    }
+    if (sv < min_v) {
+      sv = min_v;
+    }
+    raw = ((uint64_t)sv) & field_mask;
+  } else {
+    if (raw_f < 0.0f) {
+      raw_f = 0.0f;
+    }
+    raw = (uint64_t)raw_f;
+    if (raw > field_mask) {
+      raw = field_mask;
+    }
+  }
+  packRaw(data, inj.start_bit, inj.length, inj.little_endian, raw);
+}
+
 static uint8_t counterShift(uint8_t mask) {
   if (mask == 0) {
     return 0;
@@ -275,7 +447,7 @@ String volvoProfilePath() {
 // ---------------------------------------------------------------------------------------------
 
 static bool parseFrame(JsonObjectConst obj, volvo_frame_t& frame, uint8_t index, String& error) {
-  memset(&frame, 0, sizeof(frame));
+  frame = volvo_frame_t{};
   copyName(frame.name, sizeof(frame.name), jsonStrOr(obj["name"], ""));
   if (frame.name[0] == '\0') {
     snprintf(frame.name, sizeof(frame.name), "frame%u", (unsigned)index);
@@ -376,6 +548,39 @@ static bool parseFrame(JsonObjectConst obj, volvo_frame_t& frame, uint8_t index,
       }
       lb.invert = jsonBoolOr(entry["invert"], false);
       frame.lock_count++;
+    }
+  }
+
+  JsonArrayConst inject = obj["inject"].as<JsonArrayConst>();
+  if (!inject.isNull()) {
+    for (JsonObjectConst entry : inject) {
+      if (frame.inject_count >= VOLVO_MAX_INJECT) {
+        error = String("frames[") + index + "]: too many inject entries (max " + VOLVO_MAX_INJECT + ")";
+        return false;
+      }
+      volvo_inject_t& inj = frame.inject[frame.inject_count];
+      inj = volvo_inject_t{};
+      if (!parseInjectSource(jsonStrOr(entry["source"], ""), inj.source)) {
+        error = String("frames[") + index + "]: inject.source must be speed|throttle|rpm|lock|engagement|const";
+        return false;
+      }
+      const uint32_t start_bit = jsonU32Or(entry["startBit"], 0);
+      const uint32_t length = jsonU32Or(entry["length"], 8);
+      if (start_bit > 63 || length == 0 || length > 32) {
+        error = String("frames[") + index + "]: inject.startBit must be 0..63 and length 1..32";
+        return false;
+      }
+      inj.start_bit = (uint16_t)start_bit;
+      inj.length = (uint8_t)length;
+      inj.little_endian = jsonBoolOr(entry["littleEndian"], true);
+      inj.is_signed = jsonBoolOr(entry["signed"], false);
+      inj.factor = jsonFloatOr(entry["factor"], 1.0f);
+      inj.offset = jsonFloatOr(entry["offset"], 0.0f);
+      inj.lock_gain = jsonFloatOr(entry["lockGain"], 0.0f);
+      inj.value = jsonFloatOr(entry["value"], 0.0f);
+      inj.min = jsonFloatOr(entry["min"], 0.0f);
+      inj.max = jsonFloatOr(entry["max"], 0.0f);
+      frame.inject_count++;
     }
   }
 
@@ -507,7 +712,7 @@ static bool applyProfileDocument(JsonDocument& doc, String& error) {
   static char staging_units[VOLVO_MAX_SIGNALS][VOLVO_UNIT_LEN];
   uint16_t staging_signal_count = 0;
 
-  memset(&staging, 0, sizeof(staging));
+  staging = volvo_profile_t{};
   copyName(staging.name, sizeof(staging.name), jsonStrOr(doc["name"], "Volvo P1 profile"));
   const uint32_t generation = jsonU32Or(doc["generation"], haldexGeneration);
   staging.generation = (uint8_t)generation;
@@ -583,6 +788,8 @@ static String buildTemplateJson() {
   notes.add("Volvo HS-CAN uses 29-bit identifiers at 500 kbit/s: keep extd=true and write ids as 0x hex.");
   notes.add("Every frame starts disabled. Enable frames one at a time on the bench and watch the DEM.");
   notes.add("lock entries replace a byte with get_lock_target_adjusted_value(base, invert) each send.");
+  notes.add("inject entries re-encode a mapped input (speed/throttle/rpm/lock/engagement/const) into a bit field; lockGain scales it with requested lock to fake slip.");
+  notes.add("Build order per send: data -> inject -> lock -> counter -> checksum.");
   notes.add("counter writes an alive counter into the masked bits of one byte; checksum is computed last.");
 
   JsonObject status = doc["status"].to<JsonObject>();
@@ -617,6 +824,16 @@ static String buildTemplateJson() {
   lb["byte"] = 4;
   lb["base"] = "0xFE";
   lb["invert"] = false;
+  JsonArray inject = f["inject"].to<JsonArray>();
+  JsonObject inj = inject.add<JsonObject>();
+  inj["source"] = "speed";
+  inj["startBit"] = 0;
+  inj["length"] = 16;
+  inj["littleEndian"] = true;
+  inj["signed"] = false;
+  inj["factor"] = 0.01;
+  inj["offset"] = 0;
+  inj["lockGain"] = 0;
   JsonObject checksum = f["checksum"].to<JsonObject>();
   checksum["type"] = "none";
   checksum["byte"] = 7;
@@ -691,7 +908,7 @@ bool volvoProfileReload() {
   if (!readProfileFile(path, body)) {
     g_last_error = "profile file missing: " + path;
     if (lockProfile(200)) {
-      memset(&g_profile, 0, sizeof(g_profile));
+      g_profile = volvo_profile_t{};
       g_signal_count = 0;
       unlockProfile();
     }
@@ -807,6 +1024,9 @@ static void buildFrame(volvo_frame_t& frame, twai_message_t& msg) {
   msg.data_length_code = frame.dlc;
   for (uint8_t i = 0; i < 8; i++) {
     msg.data[i] = frame.data[i];
+  }
+  for (uint8_t i = 0; i < frame.inject_count; i++) {
+    applyInject(frame.inject[i], msg.data);
   }
   for (uint8_t i = 0; i < frame.lock_count; i++) {
     const volvo_lock_byte_t& lb = frame.lock[i];
@@ -983,6 +1203,13 @@ void volvoWriteStatusJson(JsonObject& out, bool include_frames) {
     row["dlc"] = frame.dlc;
     row["periodMs"] = frame.period_ms;
     row["lockBytes"] = frame.lock_count;
+    row["injectCount"] = frame.inject_count;
+    if (frame.inject_count > 0) {
+      JsonArray sources = row["inject"].to<JsonArray>();
+      for (uint8_t j = 0; j < frame.inject_count; j++) {
+        sources.add(injectSourceName(frame.inject[j].source));
+      }
+    }
     row["counter"] = frame.counter.enabled;
     row["checksum"] = checksumTypeName(frame.checksum.type);
     row["txCount"] = frame.tx_count;

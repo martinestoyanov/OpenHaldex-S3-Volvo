@@ -112,6 +112,21 @@ The DEM stays on its own isolated bus. This is deliberate:
 The trade-off is that VIDA cannot see the DEM. DEM fault reading would need Volvo's diagnostic
 protocol, which is not implemented.
 
+### 3.3 Two dialects, one controller
+
+P1 had an electrical refresh around model year 2008. Cars from 2004-2007 and cars from 2008 on
+share the physical HS-CAN but not the frame matrix, which is why modules do not swap across that
+boundary. A 2005 DEM therefore needs the 2005 dialect, while a 2011 C30 speaks the 2008-on dialect.
+The profile keeps them apart:
+
+- `frames[]` is the DEM dialect. It comes from captures of the donor-era car and is generated
+  toward the DEM.
+- `signals[]` is the host-car dialect. It comes from captures of the C30 and is decoded from the
+  chassis channel.
+- `inject[]` entries inside a frame carry decoded host values across: the controller reads C30
+  speed, pedal and rpm through Setup's mapped inputs and re-encodes them with the 2005 scaling
+  into the DEM frames. See 5.2.
+
 ## 4. Firmware behaviour on the Volvo platform
 
 | Area | Behaviour |
@@ -197,7 +212,17 @@ One file per generation in LittleFS, edited on the Volvo DEM page (`/volvo.html`
 Field notes:
 
 - `frames[].period_ms` is 10..5000; the generator ticks every 10 ms. Up to 32 frames.
-- `data` is the static payload. `lock[]` entries overwrite a byte on every send with
+- `data` is the static payload. Build order per send is `data`, then `inject`, then `lock`, then
+  `counter`, then `checksum`, so a `lock` byte overrides an injected field that shares it.
+- `inject[]` re-encodes a live controller value into a bit field: `source` is `speed` (km/h),
+  `throttle` (%), `rpm`, `lock` (requested %), `engagement` (DEM-reported %) or `const` (uses
+  `value`); `startBit`, `length`, `littleEndian` and `signed` describe the field exactly as a
+  `signals[]` entry would; `factor` and `offset` are the DEM-dialect scaling (raw = (value -
+  offset) / factor); optional `min`/`max` clamp in engineering units; `lockGain` multiplies the
+  value by `1 + lockGain * lock / 100`. Put `lockGain` on the front wheel speeds (or `-lockGain`
+  on the rears) to show the DEM slip proportional to the requested lock while still following
+  real vehicle speed. Up to 6 per frame.
+- `lock[]` entries overwrite a byte on every send with
   `get_lock_target_adjusted_value(base, invert)`: at 0 % requested lock the byte becomes `0x00`
   (`0xFE` when `invert` is true), at 100 % it becomes `base`, in between it follows the learned
   calibration table. Use it exactly where the VW strategy fakes slip or torque: a front wheel
@@ -215,7 +240,22 @@ Field notes:
 Saving validates on the device, writes the file and applies it live. Alive counters of frames
 that keep the same ID carry on across a save.
 
-### 5.3 Bench procedure
+### 5.3 Capturing from a donor car with the driveshaft disconnected
+
+A donor car that drives with the propshaft removed from the coupling is still a good capture
+source. Everything the DEM receives is real, so the key-cycle, idle, driving and sleep captures
+are unaffected, and on a wet or gravel launch the DEM still sees front-wheel slip and commands
+lock. Two caveats:
+
+- A Gen 2 coupling builds its working pressure from the speed difference across the input shaft.
+  With the shaft out, commanded lock produces no pressure and the DEM may log a pressure or pump
+  fault. A DEM in fault mode can change what it transmits, so clear DEM codes in VIDA before the
+  launch run and note whether a fault appeared during it.
+- Any "actual engagement" byte in the status frame will read as not engaged in those captures. Use
+  them to find the command and status bytes; confirm the engagement scaling later on the bench
+  with your own coupling.
+
+### 5.4 Bench procedure
 
 1. Setup: pick `Volvo Gen 2` or `Volvo Gen 3`, Save.
 2. Volvo DEM page: tick **Standalone generator**, Apply. Reset to template, then paste your
@@ -237,15 +277,17 @@ that keep the same ID carry on across a save.
 2. Wire CANHA/CANLA to the C30 HS-CAN, tick **Chassis bus receive-only**, Apply.
 3. Setup: map Speed, Throttle and RPM to the new signals and pick the DSTC button signal as the
    mode trigger. Speed / Throttle / Map / RPM modes and the trigger now work exactly as on VW.
-4. Optional later work: pass real C30 wheel speeds through the generated DEM frames (the generator
-   currently sends profile constants plus lock injection) and a full bridge mode if captures prove
-   the MY2011 frames match what the DEM wants.
+4. Add `inject` entries to the DEM frames so the DEM sees the real C30 speed, pedal and rpm in
+   its own dialect, with `lockGain` on the slip-relevant fields. The DEM then behaves as if it
+   were in a moving 2005 car instead of a stationary one with the lock bytes moving on their own.
+   A full bridge mode is not planned: the two dialects differ by design.
 
 ## 7. Limitations and open items
 
 - No Volvo frame definitions ship with the firmware; everything depends on your captures.
 - No Volvo DEM diagnostics (DTC read/clear, measured values). VIDA cannot reach an isolated DEM.
-- Generated frames carry profile constants plus lock injection; they do not yet relay live C30
-  values. That is the natural next step once phase 2 signals are mapped.
+- Injected values are limited to the controller's mapped inputs (speed, throttle, rpm) plus lock
+  and engagement. Brake, reverse, handbrake and DSTC flags from the C30 are not relayed yet; carry
+  them as profile constants or as a mode trigger until a flag-injection path exists.
 - `Volvo Gen 3` in Setup means "P1 coupling with a Gen 3 DEM fitted". It is not a Gen 3 strategy
   for VW cars; VAG never used Gen 3.

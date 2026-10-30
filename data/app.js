@@ -5437,7 +5437,7 @@ function initVolvoPage() {
       lines.push(
         `  ${f.enabled ? "[on ]" : "[off]"} ${String(f.id).padEnd(12)} ${String(f.periodMs).padStart(4)} ms  dlc ${
           f.dlc
-        }  lock:${f.lockBytes}  ctr:${f.counter ? "y" : "n"}  ck:${f.checksum}  tx ${f.txCount}  ${fmtAge(
+        }  lock:${f.lockBytes}  inj:${f.injectCount ?? 0}  ctr:${f.counter ? "y" : "n"}  ck:${f.checksum}  tx ${f.txCount}  ${fmtAge(
           f.ageMs
         )}  ${f.name}`
       );
